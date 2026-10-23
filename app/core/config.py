@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-large-en-v1.5"
     embedding_dim: int = Field(1024, gt=0)  # must equal the vector(N) column created by migration 0003
     embedding_device: str = "auto"  # auto | cpu | cuda | cuda:N
+    embedding_dtype: str = "float32"  # float32 | float16 (float16 is used only on CUDA)
     embedding_batch_size: int = Field(16, ge=1, le=256)
     embedding_max_seq_length: int = Field(512, ge=8, le=512)  # BGE-large hard limit is 512 tokens
     embedding_normalize: bool = True  # L2-normalise both documents and queries (same policy for both)
@@ -49,6 +50,14 @@ class Settings(BaseSettings):
 
     max_pdf_mb: int = Field(50, ge=1)
     storage_dir: str = "./data/storage"
+
+    # --- OCR for scanned PDFs (local; page images never leave the machine) ---
+    ocr_enabled: bool = True
+    ocr_provider: str = "auto"  # auto | rapidocr | tesseract | none
+    ocr_language: str = "eng"  # Tesseract language(s), e.g. eng, ara, eng+ara (RapidOCR uses its bundled model)
+    ocr_dpi: int = Field(200, ge=100, le=400)  # rendering resolution for OCR; higher = slower/better
+    ocr_min_page_chars: int = Field(25, ge=0, le=1000)  # below this, a page is treated as scanned
+    ocr_max_pages: int = Field(0, ge=0)  # 0 = no limit; guards very large scanned documents
 
     @field_validator("ollama_base_url")
     @classmethod
@@ -84,6 +93,22 @@ class Settings(BaseSettings):
         v = v.strip().lower()
         if not re.fullmatch(r"auto|cpu|cuda(:\d+)?", v):
             raise ValueError("EMBEDDING_DEVICE must be auto, cpu, cuda or cuda:N")
+        return v
+
+    @field_validator("embedding_dtype")
+    @classmethod
+    def _dtype(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in ("float32", "float16"):
+            raise ValueError("EMBEDDING_DTYPE must be float32 or float16")
+        return v
+
+    @field_validator("ocr_provider")
+    @classmethod
+    def _ocr_provider(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in ("auto", "rapidocr", "tesseract", "none"):
+            raise ValueError("OCR_PROVIDER must be auto, rapidocr, tesseract or none")
         return v
 
     @model_validator(mode="after")

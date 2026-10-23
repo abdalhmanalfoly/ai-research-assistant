@@ -59,6 +59,10 @@ class OCRRequired(AppError):
     status_code, code, message = 422, "ocr_required", "The PDF has no extractable text; OCR is required."
 
 
+class OCRUnavailable(AppError):
+    status_code, code, message = 503, "ocr_unavailable", "No OCR engine is available for scanned pages."
+
+
 class InvalidUpload(AppError):
     status_code, code, message = 400, "invalid_upload", "Invalid upload."
 

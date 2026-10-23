@@ -123,7 +123,11 @@ class CitationTests(unittest.TestCase):
     def test_parse_json_and_fallback(self):
         self.assertEqual(parse_llm_output(reply("x [E1]")), ("x [E1]", False))
         self.assertEqual(parse_llm_output('Sure! ' + reply("y", True))[1], True)
-        for bad in ["", "not json", '{"answer": ""}', '{"foo": 1}', "[1,2]"]:
+        self.assertEqual(parse_llm_output(reply("", True)), ("", True))
+        self.assertEqual(parse_llm_output('{"answer": "insufficient_evidence", "insufficient_evidence": true}'),
+                         ("", True))
+        for bad in ["", "not json", '{"answer": ""}', '{"answer": "", "insufficient_evidence": false}',
+                    '{"foo": 1}', "[1,2]"]:
             with self.assertRaises(InvalidLLMResponse):
                 parse_llm_output(bad)
 
@@ -166,6 +170,19 @@ class ChatServiceTests(unittest.TestCase):
     def test_model_declares_insufficient(self):
         res = run(make_service(corpus(), FakeLLM(reply("Evidence doesn't cover this.", True))).answer("convolutional networks retinopathy"))
         self.assertTrue(res.insufficient_evidence)
+        self.assertEqual(res.citations, [])
+
+    def test_model_declares_insufficient_with_empty_answer(self):
+        res = run(make_service(corpus(), FakeLLM(reply("", True))).answer("convolutional networks retinopathy"))
+        self.assertTrue(res.insufficient_evidence)
+        self.assertEqual(res.answer, NO_EVIDENCE)
+        self.assertEqual(res.citations, [])
+
+    def test_model_placeholder_becomes_readable_message(self):
+        res = run(make_service(corpus(), FakeLLM(reply("insufficient_evidence", True))).answer(
+            "convolutional networks retinopathy"))
+        self.assertTrue(res.insufficient_evidence)
+        self.assertEqual(res.answer, NO_EVIDENCE)
         self.assertEqual(res.citations, [])
 
     def test_paper_filter(self):

@@ -20,10 +20,11 @@ Status: all routes 🟡 (written; the route tests exist but were never run).
 ```json
 {"status":"ok|degraded","api":"up","max_pdf_mb":50,"ollama":"up|unreachable|error","chat_model":"available|missing|unknown",
  "embedding_model":"loaded|cached|not_cached|unavailable","embedding_provider":"huggingface","embedding_dimension":1024,
- "embedding_device":"auto|cpu|cuda","schema_dimension":1024,"chunks_pending_reindex":0,"database":"up|down","pgvector":"installed|missing|unknown",
+ "embedding_device":"auto|cpu|cuda","embedding_dtype":"float32|float16","ocr":"rapidocr|tesseract|unavailable|disabled","ocr_language":"eng","ocr_dpi":200,
+ "schema_dimension":1024,"chunks_pending_reindex":0,"database":"up|down","pgvector":"installed|missing|unknown",
  "chat_model_name":"qwen2.5:3b","embedding_model_name":"BAAI/bge-large-en-v1.5"}
 ```
-`status` is `ok` only if everything is up/available/installed and `schema_dimension` equals `embedding_dimension`. `embedding_model` reports whether the local model is `loaded` in memory, `cached` on disk, `not_cached` (will download on first use) or `unavailable` (sentence-transformers/huggingface-hub missing); it **never loads the model**. `chat_model` is checked in Ollama; Ollama is no longer involved in embeddings. `schema_dimension`/`chunks_pending_reindex` are `null` when the tables do not exist yet. Changed in the BGE update: `embedding_model` values (was `available|missing|unknown`) and new fields; all previous keys are still present. No secrets or exception details are exposed.
+`status` is `ok` only if everything is up/available/installed and `schema_dimension` equals `embedding_dimension`. `embedding_model` reports whether the local model is `loaded` in memory, `cached` on disk, `not_cached` (will download on first use) or `unavailable` (sentence-transformers/huggingface-hub missing); it **never loads the model**. `embedding_device` shows the selected device once the model is loaded; `embedding_dtype` is the configured precision (`float16` is applied only on CUDA). `chat_model` is checked in Ollama; Ollama is no longer involved in embeddings. `ocr` is informational (it does **not** affect `status`): the configured backend, `unavailable` when OCR is enabled but no backend can be found, or `disabled` when `OCR_ENABLED=false`. `schema_dimension`/`chunks_pending_reindex` are `null` when the tables do not exist yet. Changed in the BGE update: `embedding_model` values (was `available|missing|unknown`) and new fields; all previous keys are still present. No secrets or exception details are exposed.
 
 ### POST /api/chat
 Request: `question` (string, trimmed, 1–2000 chars, required); `paper_ids` (list of UUID strings, ≤100, optional); `top_k` (1–20, optional, default `RETRIEVAL_TOP_K`); `year_min`, `year_max` (1000–3000, optional, `year_min ≤ year_max`).
@@ -62,9 +63,9 @@ Query: `limit` (1–100, default 20), `offset`, `status` (`pending|running|succe
 | 400 | `invalid_upload` | Bad upload |
 | 404 | `not_found` | Unknown paper/job |
 | 409 | `paper_processing` | Defined, not currently raised |
-| 422 | `pdf_extraction_failed`, `ocr_required` | Recorded on the job/paper, not returned by upload (ingestion is async) |
+| 422 | `pdf_extraction_failed`, `ocr_required` | Recorded on the job/paper, not returned by upload (ingestion is async). `ocr_required` = no usable text even after OCR, or more scanned pages than `OCR_MAX_PAGES` |
 | 502 | `invalid_llm_response` | Model output not usable JSON |
-| 503 | `llm_unavailable`, `model_not_installed`, `embedding_unavailable` (model cannot load/run, CUDA missing, packages missing), `retrieval_failed`, `database_error` | Dependency down/missing |
+| 503 | `llm_unavailable`, `model_not_installed`, `embedding_unavailable` (model cannot load/run, CUDA missing, packages missing), `ocr_unavailable` (configured backend cannot start/import), `retrieval_failed`, `database_error` | Dependency down/missing |
 | 504 | `llm_timeout` | Generation exceeded `LLM_TIMEOUT_SECONDS` (not retried) |
 | 500 | `embedding_dimension_mismatch`, `invalid_embedding` (NaN/inf/not normalised), `internal_error` | Config mismatch / bug; stack traces are logged server-side only |
 

@@ -1,7 +1,7 @@
 # Local Setup on Windows (PowerShell)
 
 No command in this guide was executed against Supabase or Ollama by the author (no network/Windows machine was available). Steps are derived from the repository files; treat the first run as the real test.
-Prerequisites: Windows 10/11, ~10 GB free disk (Python packages incl. PyTorch, Qwen ~2 GB, BGE ~1.3 GB), 16 GB RAM recommended, internet access.
+Prerequisites: Windows 10/11, ~15 GB free disk with CUDA PyTorch (~2.6 GB wheel plus installed runtime; CPU-only PyTorch needs much less), Qwen ~2 GB, BGE ~1.3 GB, 16 GB RAM recommended, internet access.
 
 ## 1. Install tools
 * Python 3.11 or newer from python.org (tick **Add python.exe to PATH**). Check: `python --version`
@@ -48,7 +48,7 @@ Sizes are approximate.
 python -m scripts.download_model      # first run downloads ~1.3 GB to the Hugging Face cache, then embeds a test text
 python -m scripts.download_model --offline   # later: verifies it works without internet
 ```
-CPU is fine (slower). Details, GPU setup and troubleshooting: `EMBEDDINGS.md`.
+CPU is fine (slower). On an NVIDIA GPU, install the CUDA PyTorch wheel, set `EMBEDDING_DEVICE=cuda` and `EMBEDDING_DTYPE=float16`; details and 4 GB-VRAM guidance: `EMBEDDINGS.md §5`.
 
 ## 7. Create the schema
 ```powershell
@@ -82,14 +82,17 @@ Verify: every `citations[].title` and `page_number` matches a real paper in your
 
 ## 11. Tests
 ```powershell
-python -m unittest discover -s tests/unit -t .     # 49 tests ran in the build sandbox (stdlib only); 14 more skip until dependencies / a test database exist
+python -m unittest discover -s tests/unit -t .     # 69 unit tests pass with dependencies installed (~1 s)
+python -m unittest discover -s tests -t .          # 75 tests, 6 skipped (DB / opt-in live tests)
 pytest
 ```
 | Kind | Where | Needs |
 |---|---|---|
 | Unit (pure logic, fakes) | `tests/unit/test_core.py` | nothing |
+| OCR fallback (synthetic PDFs + fake engine) | `tests/unit/test_ocr.py` | PyMuPDF (in `requirements.txt`) |
 | Mocked Ollama / API | `tests/unit/test_ollama_client.py`, `test_api.py` | `pip install -r requirements.txt` |
-| Integration with DB / live Ollama | ❌ not written (`tests/integration/` empty) | Postgres, Ollama |
+| Integration with DB / live Ollama | ❌ not written | Postgres, Ollama |
+| Live OCR (opt-in) | `tests/integration/test_ocr_live.py` | `rapidocr-onnxruntime`; set `RUN_OCR_TESTS=1` |
 
 ## 12. Troubleshooting
 | Symptom | Likely cause | Check / fix |
@@ -103,7 +106,8 @@ pytest
 | `password authentication failed` | wrong/old password, special chars not encoded | reset DB password; percent-encode |
 | Pydantic error at startup | invalid setting (e.g. `LLM_NUM_CTX` too small) | read the message; compare to `.env.example` |
 | `embedding_dimension_mismatch` | `EMBEDDING_DIM` ≠ model output or DB column | BGE-large = 1024; check `/api/health` `schema_dimension`; run `alembic upgrade head` |
-| Paper `needs_ocr` | scanned PDF | OCR externally (e.g. OCRmyPDF) and re-import |
+| Paper `needs_ocr` | scanned PDF and OCR found no readable text, or OCR disabled/unavailable | check `/api/health` → `ocr`; `pip install -r requirements.txt`; try `OCR_DPI=300`; OCR externally (e.g. OCRmyPDF) as a last resort |
+| OCR is very slow | CPU inference at high DPI / many scanned pages | lower `OCR_DPI` (150), split the document, or raise `OCR_MAX_PAGES`; expect roughly 5–30 s/page |
 | `insufficient_evidence` for everything | threshold too high, nothing indexed, or filters too narrow | `select status,count(*) from papers group by 1;` lower `RETRIEVAL_THRESHOLD` after calibration |
 | `llm_timeout` | CPU-only generation is slow | raise `LLM_TIMEOUT_SECONDS`, lower `LLM_NUM_CTX`/`top_k` |
 | Duplicate import does nothing | same SHA-256 already registered | expected (idempotent) |

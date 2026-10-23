@@ -1,24 +1,25 @@
 # AI Research Assistant — Backend
 
-FastAPI + PostgreSQL/pgvector + Ollama (`qwen2.5:3b`, generation only) + local Hugging Face embeddings (`BAAI/bge-large-en-v1.5`, 1024 dims, via sentence-transformers). Answers questions about an indexed corpus of research PDFs, with application-validated citations (paper title, DOI/URL, real PDF page number).
+FastAPI + PostgreSQL/pgvector + Ollama (`qwen2.5:3b`, generation only) + local Hugging Face embeddings (`BAAI/bge-large-en-v1.5`, 1024 dims, via sentence-transformers). Answers questions about an indexed corpus of research PDFs, with application-validated citations (paper title, DOI/URL, real PDF page number). Scanned PDFs are handled by a local OCR fallback (RapidOCR); no page images leave the machine.
 
 ## Verification status (read first)
 
 | Area | Status |
 |---|---|
 | Chunking, evidence selection, prompt building, citation validation, RAG orchestration | **Unit-tested, passing** (stdlib `unittest`, synthetic fixtures, fake embedder/LLM/in-memory store) |
-| Embedder wrapper (fake model: dims, NaN/inf, order, query instruction, device, errors), resumable re-index logic | **Unit-tested, passing** (49 Python tests ran and passed; 14 more are skipped until dependencies or a test database exist) |
-| Ollama client (mocked HTTP) | Tests written; **not run** (httpx not installable offline) |
-| Real BGE model download/inference, GPU | **Not tested** |
-| Migration 0003, pgvector search, SQL re-index (tests in `tests/integration/`) | Written; **skipped without `TEST_DATABASE_URL`, never run** |
-| FastAPI routes, error envelope | Tests written; **not run** |
-| PostgreSQL / pgvector store, models, Alembic migration, ingestion pipeline, PyMuPDF extraction | Code written; **never executed** |
-| Live Qwen 2.5 3B via Ollama | **Not tested** |
-| Real research papers | **Not tested** |
+| Embedder wrapper (fake model: dims, NaN/inf, order, query instruction, device, dtype, errors), resumable re-index logic, API/Ollama clients | **Unit-tested, passing** (73 passed, 6 integration skipped — see Tests) |
+| Real BGE model download/inference, CPU and CUDA fp16 | **Live-tested** (`BAAI/bge-large-en-v1.5`, 1024 dims; CPU first load ~79 s; CUDA on RTX 2050 4 GB: first load ~26 s, batch 4×1300 chars 0.64 s, 0.68 GB allocated) |
+| Migration 0003, pgvector search, SQL re-index | **Live-tested against Supabase Postgres** |
+| FastAPI routes, error envelope | **Live-tested** via the web UI and `curl` |
+| PostgreSQL / pgvector store, models, Alembic migration, ingestion pipeline, PyMuPDF extraction | **Live-tested end-to-end** (multiple PDFs indexed; jobs reached `succeeded`) |
+| Live Qwen 2.5 3B via Ollama | **Live-tested** (100% GPU at 4096 context; cited answers ~6–10 s) |
+| Qwen + BGE on one 4 GB GPU | **Live-tested**: Qwen 2.2 GB + BGE fp16 0.74 GB ≈ 3.1/4 GB; 73-chunk re-index and cited chat succeeded |
+| Real research papers | **Live-tested**: two papers uploaded and indexed; cited answers verified on one |
+| OCR fallback (`rapidocr-onnxruntime`) | **Live-tested** on a synthetic scanned page (~27 s/page on CPU incl. model load); real scans not evaluated |
 
 Supabase is supported as a plain PostgreSQL host via `DATABASE_URL`; no Supabase client library, Auth, or Storage is used yet (see docs). Migrations: `0001` schema, `0002` RLS, `0003` vector(1024) for BGE.
 
-Treat everything not marked "passing" as a first draft that needs its first real run.
+Treat anything not marked as passing/live-tested as a first draft that still needs its first real run.
 
 ## Documentation
 | Doc | Contents |
@@ -65,7 +66,7 @@ curl localhost:8000/api/health   # reports ollama up/unreachable, model availabl
 python -m scripts.import_corpus --dir data/pdfs                 # titles default to file names
 python -m scripts.import_corpus --manifest corpus.json          # real metadata (see script docstring)
 ```
-Re-running is safe: PDFs are keyed by SHA-256, so already-indexed files are skipped. Scanned PDFs with no text are marked `needs_ocr` (OCR is not implemented). Upload one-off PDFs with `POST /api/papers/upload` and poll `GET /api/jobs/{id}`.
+Re-running is safe: PDFs are keyed by SHA-256, so already-indexed files are skipped. Scanned pages are OCR'd automatically (RapidOCR, local; see `OCR_*` settings); a paper is marked `needs_ocr` only when OCR still finds no readable text. Upload one-off PDFs with `POST /api/papers/upload` and poll `GET /api/jobs/{id}`.
 
 ## Chat
 
@@ -90,10 +91,12 @@ Embeddings are BGE (1024-dim) computed locally; see `docs/EMBEDDINGS.md`. Upgrad
 python -m unittest discover -s tests/unit -t .     # works with stdlib only; framework tests skip if deps missing
 pytest                                             # after pip install -r requirements.txt
 ```
-`tests/fixtures/fakes.py` is test-only synthetic data. `tests/integration/` is empty: DB and live-Ollama tests still need to be written.
+`tests/fixtures/fakes.py` is test-only synthetic data. `tests/integration/test_ocr_live.py` is opt-in (`RUN_OCR_TESTS=1`); DB and live-Ollama integration tests still need to be written.
 
 ## Known limitations
-- No OCR; no conversation history; no authentication; no rate limiting.
+- OCR is CPU-bound (~5-30 s/page depending on DPI and page density); low-quality or handwritten scans may still fail.
+- On a 4 GB GPU, Qwen (~2.2 GB at 4096 context) and BGE fp16 share VRAM; for bulk ingestion use `EMBEDDING_BATCH_SIZE=4` or lower, or `ollama stop qwen2.5:3b` first.
+- No conversation history; no authentication; no rate limiting.
 - Ingestion runs in-process via FastAPI BackgroundTasks (lost on restart; stuck `processing` rows are not auto-recovered).
 - Section detection is heuristic (common heading names only).
 - Evidence budget uses ~3 chars/token, an approximation.

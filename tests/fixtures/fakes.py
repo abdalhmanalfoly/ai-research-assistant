@@ -86,9 +86,14 @@ class FakeSTModel:
 
     def __init__(self, dim=1024, mode="ok"):
         self.dim, self.mode, self.calls, self.max_seq_length, self.evaluated = dim, mode, [], None, False
+        self.half_called = False
 
     def eval(self):
         self.evaluated = True
+
+    def half(self):
+        self.half_called = True
+        return self
 
     def get_sentence_embedding_dimension(self):
         return self.dim

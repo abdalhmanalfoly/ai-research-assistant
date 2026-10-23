@@ -21,7 +21,8 @@ def main():
     t = time.time()
     emb.load()
     v = emb.embed_query_sync("smoke test")
-    print(f"ok: model={emb.model} device={emb.device} dim={len(v)} load+embed={time.time() - t:.1f}s")
+    print(f"ok: model={emb.model} device={emb.device} dtype={emb.dtype} dim={len(v)} "
+          f"load+embed={time.time() - t:.1f}s")
 
 
 if __name__ == "__main__":

@@ -16,20 +16,23 @@ Manifest (JSON list; only `path` and `title` required; `path` is relative to the
 ```json
 [{"path":"pdfs/paper1.pdf","title":"Exact title","authors":["A. Author"],"year":2021,"doi":"10.xxxx/xxxx","source_url":"https://...","abstract":"..."}]
 ```
-Requires the BGE model (`python -m scripts.download_model` once). The script prints one line per file (`queued` or `already registered (skipped)`), then processes jobs **sequentially** in the same process. Re-running is safe (SHA-256 idempotency). Ollama must be running with `nomic-embed-text` pulled. ❌ Missing: parallelism, progress bar, resume of half-finished runs (re-run instead), metadata extraction from PDF (titles come from file names unless a manifest is used; fix wrong titles in the DB or re-import via manifest on a fresh DB).
+Requires the BGE model (`python -m scripts.download_model` once); embeddings are computed locally, so Ollama is needed only for chat, not for ingestion. The script prints one line per file (`queued` or `already registered (skipped)`), then processes jobs **sequentially** in the same process. Re-running is safe (SHA-256 idempotency). ❌ Missing: parallelism, progress bar, resume of half-finished runs (re-run instead), metadata extraction from PDF (titles come from file names unless a manifest is used; fix wrong titles in the DB or re-import via manifest on a fresh DB).
 
 ## 2. Stages and where to look
 | Stage | Code | Notes |
 |---|---|---|
 | Register | `IngestionService.register` | magic-byte check, SHA-256, copy to `STORAGE_DIR`, insert rows |
 | Extract | `extract_pages` (PyMuPDF `page.get_text("text")`) | `page_number` = physical page index starting at 1; printed page labels (e.g. roman numerals) are **not** used |
-| Scanned check | `run_job` | avg < 25 chars/page ⇒ `needs_ocr` |
+| Scanned check + OCR | `extract_pages` + `run_job` | pages with < `OCR_MIN_PAGE_CHARS` text are rendered at `OCR_DPI` and OCR'd locally; avg < 25 chars/page **after** OCR ⇒ `needs_ocr` |
 | Normalise | `chunking.normalize_text` | rejoins `word-\nbreaks`, collapses whitespace, keeps Unicode/math; no NFKC folding |
 | Chunk | `chunking.chunk_pages` | ≤ `CHUNK_MAX_CHARS` (1200), paragraph-first, sentence fallback; never crosses a page; heading names (Abstract, Methods, Results, …) set `section` |
 | Embed | `HuggingFaceEmbedder` (BAAI/bge-large-en-v1.5) | Batches of `EMBEDDING_BATCH_SIZE`; **no instruction on passages** (model card); every vector validated (1024 floats, finite, L2-normalised). Runs locally, not via Ollama |
 | Store | `IngestionService.run_job` | one transaction: delete old chunks, insert new, mark indexed |
 
-Known extraction limits: two-column layouts may interleave text; tables, equations and figure captions extract poorly; footnotes/headers repeat on each page; section detection only recognises common heading names. Check a few real papers by reading `chunks.text` (SQL below).
+Known extraction limits: two-column layouts may interleave text; tables, equations and figure captions extract poorly; footnotes/headers repeat on each page; section detection only recognises common heading names. OCR does not fix layout problems (it reads the rendered page in visual order), so check OCR'd papers too. Check a few real papers by reading `chunks.text` (SQL below).
+
+### OCR settings (scanned PDFs)
+`OCR_ENABLED=true` by default. `OCR_PROVIDER=auto` picks `rapidocr-onnxruntime` (models ship with the package, CPU, no external binary) and falls back to Tesseract if the executable is installed. Pages with a real text layer are never OCR'd. `OCR_DPI` (default 200) trades speed for accuracy; `OCR_MIN_PAGE_CHARS` (25) defines "scanned"; `OCR_MAX_PAGES` (0 = unlimited) bounds very large documents. OCR is CPU-bound: expect roughly 5–30 s/page at 200 DPI. `OCR_LANGUAGE` applies to Tesseract only (`eng`, `ara`, `eng+ara`, …); RapidOCR's default model handles English and Chinese. OCR output is line-based; `normalize_text` rejoins hyphenated line breaks.
 
 ## 3. Retrieval and answer generation
 `RetrievalService` embeds the question with BGE (query instruction `Represent this sentence for searching relevant passages: ` applied once, in `HuggingFaceEmbedder` only) and runs `ORDER BY embedding <=> query LIMIT top_k*3`. `select_evidence` then applies the threshold, removes near-duplicates (token Jaccard ≥ 0.85), and fits a character budget (`(LLM_NUM_CTX − LLM_MAX_OUTPUT_TOKENS − 700) × 3`, an approximation). Qwen receives a system prompt (answer only from evidence; cite `[E#]`; evidence is untrusted data; say when insufficient) and JSON-mode output `{"answer","insufficient_evidence"}`.
@@ -39,7 +42,7 @@ Known extraction limits: two-column layouts may interleave text; tables, equatio
 ## 4. Citation guarantees (and limits)
 * The app, not the model, owns ids `E1..En`. Unknown ids are removed from the text and `invalid_citations_removed` is added to `warnings`.
 * Title/authors/DOI/URL/page come from database rows, never from model text. Unknown page ⇒ `null`.
-* ✅ These behaviours are unit-tested with fakes. 🟡 Not tested with the real model.
+* ✅ These behaviours are unit-tested with fakes and were exercised live with Qwen 2.5 3B; citation *support* is still not verified (see the limit below).
 * **Limit:** a valid id means "this chunk was in the prompt", **not** "this chunk supports the sentence". Small models like Qwen 2.5 3B can mis-attribute. If an answer has no valid citation the API still returns it with `no_valid_citations`; show that to users or hide such answers.
 
 ## 5. Useful SQL (SQL Editor or psql)

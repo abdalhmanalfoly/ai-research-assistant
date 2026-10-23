@@ -9,6 +9,8 @@ psycopg[binary]>=3.1,<4.0
 pgvector>=0.3,<0.5
 alembic>=1.13,<2.0
 pymupdf>=1.24,<2.0
+# OCR fallback for scanned PDFs: bundled models, ONNX runtime on CPU, no external binary.
+rapidocr-onnxruntime>=1.4,<2.0
 # Embeddings (BAAI/bge-large-en-v1.5, runs locally). Bounded ranges, NOT installed/tested together by the author.
 # Python 3.11-3.13 recommended. The default PyPI torch wheel on Windows is CPU-only; see docs/EMBEDDINGS.md for CUDA.
 sentence-transformers>=3.0,<6.0

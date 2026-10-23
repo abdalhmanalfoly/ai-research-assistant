@@ -47,6 +47,8 @@ class ChatService:
         warnings = ["evidence_truncated_to_fit_context"] if stats.truncated else []
         raw = await self.llm.chat(build_messages(question, evidence))  # no automatic retry on timeout
         answer, model_says_insufficient = parse_llm_output(raw)
+        if model_says_insufficient and not answer:
+            return self._insufficient(NO_EVIDENCE, retrieved=len(evidence), warnings=warnings)
         processed = process_answer(answer, evidence)
 
         if processed.invalid_ids:

@@ -40,8 +40,12 @@ async def health(c: Container = Depends(get_container)):
     schema_ok = db["schema_dimension"] in (None, s.embedding_dim)
     ok = (ollama["ollama"] == "up" and ollama["chat_model"] == "available" and emb_state in ("loaded", "cached")
           and db["database"] == "up" and db["pgvector"] == "installed" and schema_ok)
+    ocr_state = ("disabled" if (not s.ocr_enabled or s.ocr_provider == "none")
+                 else (getattr(c.ocr, "name", None) or "unavailable"))
     return {"status": "ok" if ok else "degraded", "api": "up", **ollama,
             "embedding_model": emb_state, "embedding_provider": s.embedding_provider,
             "embedding_dimension": s.embedding_dim,
-            "embedding_device": c.embedder.device or s.embedding_device, **db,
+            "embedding_device": c.embedder.device or s.embedding_device,
+            "embedding_dtype": getattr(c.embedder, "dtype", s.embedding_dtype),
+            "ocr": ocr_state, "ocr_language": s.ocr_language, "ocr_dpi": s.ocr_dpi, **db,
             "max_pdf_mb": s.max_pdf_mb, "chat_model_name": s.llm_model, "embedding_model_name": s.embedding_model}

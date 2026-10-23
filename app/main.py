@@ -22,6 +22,7 @@ from app.services.chat_service import ChatService, RagConfig
 from app.services.ingestion_service import IngestionService
 from app.services.providers.embeddings import HuggingFaceEmbedder
 from app.services.providers.ollama import OllamaClient
+from app.services.ocr import build_ocr_engine
 from app.services.retrieval_service import RetrievalService
 
 log = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ def build_embedder(s) -> HuggingFaceEmbedder:
     return HuggingFaceEmbedder(
         s.embedding_model, s.embedding_dim, s.embedding_device, s.embedding_batch_size, s.embedding_max_seq_length,
         s.embedding_normalize, s.embedding_query_instruction, s.embedding_document_prefix,
-        s.embedding_cache_dir, s.embedding_offline)
+        s.embedding_cache_dir, s.embedding_offline, dtype=s.embedding_dtype)
 
 
 def build_container() -> Container:
@@ -40,11 +41,15 @@ def build_container() -> Container:
     client = OllamaClient(s.ollama_base_url, s.llm_model, s.llm_timeout_seconds, s.llm_temperature,
                           s.llm_num_ctx, s.llm_max_output_tokens)  # generation only
     embedder = build_embedder(s)
+    ocr = build_ocr_engine(s.ocr_provider, s.ocr_language) if s.ocr_enabled else None
     retrieval = RetrievalService(embedder, PgVectorStore(sf, s.embedding_model), s.embedding_dim)
     chat_service = ChatService(retrieval, client, RagConfig(s.retrieval_threshold, s.retrieval_top_k,
                                                             s.effective_evidence_budget_chars))
-    ingestion = IngestionService(sf, embedder, s.storage_dir, s.chunk_max_chars, s.embedding_dim)
-    return Container(s, client, chat_service, ingestion, sf, embedder)
+    ingestion = IngestionService(sf, embedder, s.storage_dir, s.chunk_max_chars, s.embedding_dim,
+                                 ocr=ocr, ocr_dpi=s.ocr_dpi, ocr_min_page_chars=s.ocr_min_page_chars,
+                                 ocr_max_pages=s.ocr_max_pages)
+    return Container(settings=s, ollama=client, chat=chat_service, ingestion=ingestion,
+                     session_factory=sf, embedder=embedder, ocr=ocr)
 
 
 def _err(status: int, code: str, message: str, **extra):

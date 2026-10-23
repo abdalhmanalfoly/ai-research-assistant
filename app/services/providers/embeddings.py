@@ -35,9 +35,16 @@ def resolve_device(requested: str, cuda_available: bool) -> str:
     return requested
 
 
-def _default_loader(model_name: str, device: str, cache_dir: str | None, offline: bool) -> Any:
+def _default_loader(model_name: str, device: str, cache_dir: str | None, offline: bool,
+                    dtype: str = "float32") -> Any:
     from sentence_transformers import SentenceTransformer  # heavy import, kept lazy
-    return SentenceTransformer(model_name, device=device, cache_folder=cache_dir, local_files_only=offline)
+    model_kwargs = None
+    if dtype == "float16" and device.startswith("cuda"):
+        import torch
+        # Load directly in fp16 so the fp32 weights never occupy VRAM (important on 4 GB cards).
+        model_kwargs = {"torch_dtype": torch.float16}
+    return SentenceTransformer(model_name, device=device, cache_folder=cache_dir, local_files_only=offline,
+                               model_kwargs=model_kwargs)
 
 
 def _cuda_available() -> bool:
@@ -54,11 +61,15 @@ class HuggingFaceEmbedder:
                  query_instruction: str = "Represent this sentence for searching relevant passages: ",
                  document_prefix: str = "", cache_dir: str | None = None, offline: bool = False,
                  model_loader: Callable[..., Any] | None = None,
-                 cuda_available: Callable[[], bool] | None = None):
+                 cuda_available: Callable[[], bool] | None = None, dtype: str = "float32"):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
+        dtype = dtype.strip().lower()
+        if dtype not in ("float32", "float16"):
+            raise ValueError("dtype must be float32 or float16")
         self.model, self.dimension, self.device_setting = model_name, dimension, device
         self.batch_size, self.max_seq_length, self.normalize = batch_size, max_seq_length, normalize
+        self.dtype = dtype
         self.query_instruction, self.document_prefix = query_instruction, document_prefix
         self.cache_dir, self.offline = cache_dir, offline
         self._loader = model_loader or _default_loader
@@ -79,11 +90,23 @@ class HuggingFaceEmbedder:
             device = resolve_device(self.device_setting, self._cuda_available())
             try:
                 log.info("loading embedding model %s on %s", self.model, device)
-                st = self._loader(self.model, device, self.cache_dir, self.offline)
+                st = self._loader(self.model, device, self.cache_dir, self.offline, self.dtype)
                 if hasattr(st, "max_seq_length"):
                     st.max_seq_length = self.max_seq_length
                 if hasattr(st, "eval"):
                     st.eval()
+                if self.dtype == "float16":
+                    if device.startswith("cuda"):
+                        try:
+                            cast = st.half()
+                            if cast is not None:
+                                st = cast
+                            log.info("using float16 embeddings on %s", device)
+                        except Exception as e:
+                            log.warning("could not switch embeddings to float16 on %s (%s); using float32",
+                                        device, type(e).__name__)
+                    else:
+                        log.warning("EMBEDDING_DTYPE=float16 is only supported on CUDA; using float32 on %s", device)
             except EmbeddingUnavailable:
                 raise
             except ImportError:

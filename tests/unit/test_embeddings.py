@@ -16,8 +16,8 @@ def make(model=None, **kw):
     model = model or FakeSTModel()
     loads = []
 
-    def loader(name, device, cache, offline):
-        loads.append((name, device, cache, offline))
+    def loader(name, device, cache, offline, dtype="float32"):
+        loads.append((name, device, cache, offline, dtype))
         return model
 
     kw.setdefault("cuda_available", lambda: False)
@@ -114,6 +114,23 @@ class EmbedderTests(unittest.TestCase):
         self.assertEqual(loads[0][1], "cuda")
         self.assertEqual(e.device, "cuda")
 
+    def test_float16_cast_only_on_cuda(self):
+        e, m, loads = make(device="auto", cuda_available=lambda: True, dtype="float16")
+        e.load()
+        self.assertTrue(m.half_called)
+        self.assertEqual(e.dtype, "float16")
+        self.assertEqual(loads[0][4], "float16")  # loader can load directly in fp16
+
+        e2, m2, _ = make(device="cpu", cuda_available=lambda: True, dtype="float16")
+        with self.assertLogs("app.services.providers.embeddings", level="WARNING") as logs:
+            e2.load()
+        self.assertFalse(m2.half_called)
+        self.assertIn("only supported on CUDA", "".join(logs.output))
+
+    def test_invalid_dtype_rejected(self):
+        with self.assertRaises(ValueError):
+            HuggingFaceEmbedder("m", 1024, dtype="float64")
+
     def test_cuda_requested_but_missing_fails_clearly(self):
         e, *_ = make(device="cuda")
         with self.assertRaises(EmbeddingUnavailable) as ctx:
@@ -170,6 +187,7 @@ class SettingsTests(unittest.TestCase):
         s = Settings(_env_file=None)
         self.assertEqual((s.embedding_provider, s.embedding_model, s.embedding_dim, s.embedding_device),
                          ("huggingface", "BAAI/bge-large-en-v1.5", 1024, "auto"))
+        self.assertEqual(s.embedding_dtype, "float32")
         self.assertTrue(s.embedding_normalize)
 
     def test_cors_wildcard_rejected(self):
@@ -178,11 +196,13 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(Settings(_env_file=None, cors_origins="http://localhost:5500").cors_origins, "http://localhost:5500")
 
     def test_validation(self):
-        for kw in ({"embedding_device": "gpu"}, {"embedding_dim": 768}, {"embedding_provider": "ollama"},
-                   {"embedding_batch_size": 0}, {"embedding_max_seq_length": 1024}):
+        for kw in ({"embedding_device": "gpu"}, {"embedding_dtype": "float64"}, {"embedding_dim": 768},
+                   {"embedding_provider": "ollama"}, {"embedding_batch_size": 0},
+                   {"embedding_max_seq_length": 1024}):
             with self.assertRaises(Exception, msg=str(kw)):
                 Settings(_env_file=None, **kw)
         self.assertEqual(Settings(_env_file=None, embedding_device="CUDA:1").embedding_device, "cuda:1")
+        self.assertEqual(Settings(_env_file=None, embedding_dtype="FLOAT16").embedding_dtype, "float16")
 
 
 if __name__ == "__main__":

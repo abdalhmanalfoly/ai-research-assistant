@@ -6,11 +6,11 @@
 
 | # | Question | Finding |
 |---|---|---|
-| 1 | What is implemented? | FastAPI app, 6 endpoints, chunking, evidence selection, prompt building, citation validation, RAG orchestration, Ollama chat client, local Hugging Face embedder (BGE), SQLAlchemy models, pgvector store, Alembic migrations (0001 schema, 0002 RLS), PDF ingestion, corpus import script. |
-| 2 | Implemented but untested? | Everything that needs third-party packages or services: routes, Ollama HTTP clients (mocked tests written, never run), SQLAlchemy models/store, migrations, PyMuPDF extraction, ingestion, import script. |
-| 3 | What is missing? | Authentication, CORS, rate limiting, Supabase Storage, OCR, chat history, `collections`/`conversations`/`messages` tables, integration tests (`tests/integration/` is empty), paper delete/update endpoints, automatic recovery of jobs stuck in `processing`. |
+| 1 | What is implemented? | FastAPI app, 6 endpoints, chunking, evidence selection, prompt building, citation validation, RAG orchestration, Ollama chat client, local Hugging Face embedder (BGE), SQLAlchemy models, pgvector store, Alembic migrations (0001 schema, 0002 RLS), PDF ingestion with a local OCR fallback (RapidOCR/Tesseract), corpus import script. |
+| 2 | Implemented but untested? | GPU embedding, the corpus import script, OCR quality on real scans, very large scanned documents (`OCR_MAX_PAGES` guard), and an automated DB/live-Ollama integration suite. The main API → ingestion → retrieval → chat path has been run live. |
+| 3 | What is missing? | Authentication, CORS, rate limiting, Supabase Storage, chat history, `collections`/`conversations`/`messages` tables, DB/live-Ollama integration tests, paper delete/update endpoints, automatic recovery of jobs stuck in `processing`. |
 | 4 | Which database does it expect? | PostgreSQL ≥ 13 with the `vector` extension (`DATABASE_URL`). Nothing Supabase-specific. |
-| 5 | PostgreSQL + pgvector integrated? | 🟡 Yes, in code (`app/db/models.py`, `app/db/repositories/pgvector_store.py`, migration `0001_initial.py` with an HNSW cosine index). Never executed against a real database. |
+| 5 | PostgreSQL + pgvector integrated? | ✅ Yes (`app/db/models.py`, `app/db/repositories/pgvector_store.py`, migration `0001_initial.py` with an HNSW cosine index). Verified against Supabase Postgres: migrations, ingestion, and cosine retrieval all ran. |
 | 6 | SQLAlchemy / SQL / Supabase client? | **SQLAlchemy 2.0 + psycopg 3.** No raw SQL except in migrations and `health.py`. `grep -ri supabase` over the code finds nothing: no Supabase client library is used. |
 | 7 | Where are PDFs stored? | **Local disk**: `STORAGE_DIR` (default `./data/storage`), file name `<sha256>.pdf`, referenced by `papers.storage_key` (`app/services/ingestion_service.py`). Not Supabase Storage. |
 | 8 | How are chunks/embeddings persisted and retrieved? | `chunks.embedding` is `vector(1024)` (nullable; migration 0003), `embedding_model`/`embedding_dim` record the producer. NULL = pending re-index. Retrieval uses `Chunk.embedding.cosine_distance(query_vec)`, filtered to `papers.status='indexed'` and `chunks.embedding_model = EMBEDDING_MODEL`; score = `1 - distance`. |
@@ -23,6 +23,7 @@
 Frontend / other app ──HTTPS──▶ FastAPI backend (this repo) ──SQLAlchemy/psycopg──▶ Supabase Postgres (+pgvector)
                                    │  └──HTTP──▶ Ollama (qwen2.5:3b, generation only)  [your machine/server]
                                    └──in-process──▶ sentence-transformers (BAAI/bge-large-en-v1.5, CPU/GPU, local cache)
+                                   └──in-process──▶ RapidOCR / Tesseract (local; scanned pages only)
                                    └──(optional, 💡 future)──▶ Supabase Storage (private bucket) / Supabase Auth (JWT verify)
 ```
 
@@ -35,8 +36,8 @@ Frontend / other app ──HTTPS──▶ FastAPI backend (this repo) ──SQLA
 
 ### Initial ingestion (runs once per paper)
 1. 🟡 `scripts/import_corpus.py` (or `POST /api/papers/upload`) calls `IngestionService.register()`: checks `%PDF-` magic bytes, computes SHA-256, copies the PDF to `STORAGE_DIR/<hash>.pdf`, inserts `papers` (`status=pending`) and `ingestion_jobs` (`pending`). Same hash already indexed/pending/processing → returns the existing paper, **no new job** (idempotent).
-2. 🟡 `run_job()` sets job `running`, paper `processing`; PyMuPDF extracts text per physical page (1-based).
-3. If average text is < 25 chars/page → paper `needs_ocr`, job `failed` (OCR not implemented).
+2. 🟡 `run_job()` sets job `running`, paper `processing`; PyMuPDF extracts text per physical page (1-based). Pages with < `OCR_MIN_PAGE_CHARS` characters are rendered at `OCR_DPI` and passed to the local OCR engine.
+3. If OCR is disabled/unavailable or finds nothing and average text is < 25 chars/page → paper `needs_ocr`, job `failed`. `OCR_MAX_PAGES` bounds very large scanned documents.
 4. `chunk_pages()` normalises text and splits into ≤ `CHUNK_MAX_CHARS` chunks that never cross a page, tagging a heuristic `section`.
 5. Embeddings from `BAAI/bge-large-en-v1.5` via sentence-transformers (**no instruction on passages**), batches of `EMBEDDING_BATCH_SIZE`; every vector is validated (1024 floats, finite, L2-normalised) or the job fails.
 6. Old chunks of that paper are deleted and new ones inserted in one transaction; paper → `indexed`, job → `succeeded`. Errors → `failed` + `error_message`.
@@ -50,7 +51,7 @@ Frontend / other app ──HTTPS──▶ FastAPI backend (this repo) ──SQLA
 6. Send evidence + question to Qwen via Ollama (`/api/chat`, JSON mode). No retry on timeout.
 7. Parse JSON; strip any `[E#]` not supplied; resolve valid ids to paper title/authors/DOI/URL/page from the database rows; return.
 
-✅ = steps 3–7 verified by unit tests with fakes. 🟡 = real pgvector/Ollama never exercised.
+✅ = logic verified by unit tests with fakes; the full path was also exercised live against Supabase Postgres + Ollama.
 
 ## 4. PDF binary vs. searchable text
 * **PDF binary** = the original file, kept for download/re-processing/re-indexing. Belongs in file storage (local disk now; Supabase Storage 💡).

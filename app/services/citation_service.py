@@ -36,10 +36,16 @@ def parse_llm_output(raw: str) -> tuple[str, bool]:
                 data = json.loads(m.group(0))
             except json.JSONDecodeError:
                 data = None
-    if not isinstance(data, dict) or not isinstance(data.get("answer"), str) or not data["answer"].strip():
+    if not isinstance(data, dict) or not isinstance(data.get("answer"), str):
         raise InvalidLLMResponse()
     flag = data.get("insufficient_evidence", False)
-    return data["answer"].strip(), flag if isinstance(flag, bool) else False
+    flag = flag if isinstance(flag, bool) else False
+    answer = data["answer"].strip()
+    if flag and answer.lower() in ("insufficient_evidence", "insufficient evidence"):
+        answer = ""  # the model used its flag as a placeholder; the app supplies a readable message
+    if not answer and not flag:
+        raise InvalidLLMResponse()
+    return answer, flag
 
 
 def process_answer(answer: str, evidence: list[Evidence]) -> ProcessedAnswer:

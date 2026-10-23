@@ -103,7 +103,7 @@ function followJob({ paperId, jobId }) {
       const paper = await getPaper(paperId).catch(() => null);
       if (job.status === 'succeeded' && paper?.status === 'indexed') { paint(job, paper, el('div', { class: 'callout callout--ok' }, icon('check'), el('div', { text: 'Indexed: this paper is now searchable in Research Chat.' }))); toast('Paper indexed', { type: 'ok' }); }
       else if (job.status === 'succeeded') paint(job, paper, el('div', { class: 'callout callout--warn' }, icon('alert'), el('div', { text: `The job succeeded but the paper status is “${paper?.status ?? 'unknown'}”. Check the library before relying on it.` })));
-      else paint(job, paper, el('div', { class: `callout callout--${paper?.status === 'needs_ocr' ? 'warn' : 'bad'}` }, icon('alert'), el('div', { text: `${job.errorMessage ?? 'Processing failed.'}${paper?.status === 'needs_ocr' ? ' This looks like a scanned PDF: OCR is not supported, so it cannot be indexed as is.' : ''}` })));
+      else paint(job, paper, el('div', { class: `callout callout--${paper?.status === 'needs_ocr' ? 'warn' : 'bad'}` }, icon('alert'), el('div', { text: `${job.errorMessage ?? 'Processing failed.'}${paper?.status === 'needs_ocr' ? ' OCR runs automatically on scanned pages; if it found nothing, try a higher-quality scan (300 DPI) or OCR the file externally.' : ''}` })));
     } catch (err) { card.append(el('div', { class: 'field-error', text: `Could not read job status: ${describeError(err)}` })); pollTimer = setTimeout(tick, TIMING.jobPollMs * 3); }
   };
   tick();

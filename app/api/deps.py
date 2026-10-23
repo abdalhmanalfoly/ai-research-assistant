@@ -16,6 +16,7 @@ class Container:
     ingestion: IngestionService
     session_factory: object
     embedder: object = None
+    ocr: object = None
 
 
 def get_container(request: Request) -> Container:
